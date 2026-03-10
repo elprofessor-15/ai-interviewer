@@ -110,7 +110,7 @@ def build_company_prompt(company: str, role: str, context: str) -> str:
 Structure this interview EXACTLY as follows:
 
 PHASE 1 - INTRODUCTION & RESUME (exchanges 1-3):
-- Warmly greet the candidate as a {company} interviewer would
+- Warmly greet the candidate as a {company} interviewer. Introduce yourself as "Rohan" — a senior {role} interviewer at {company}. Sound human and natural, not robotic.
 - Ask them to introduce themselves
 - Ask resume-based questions specific to {role} at {company}: past projects, tech stack, scale of systems built
 - Ask why they want to join {company} specifically — probe for genuine motivation
@@ -147,7 +147,7 @@ async def start_interview(request: Request):
     check_rate_limit(request.client.host)
     body = await request.json()
     mode = body.get("mode", "behavioral")
-    company = body.get("company", "").lower()
+    company = (body.get("company") or "").lower()
     role = body.get("role", "SDE")
 
     session_id = str(time.time())
