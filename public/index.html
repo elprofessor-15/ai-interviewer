@@ -543,6 +543,52 @@
   /* Fade in page */
   .setup-inner { animation: fadeUp 0.5s ease; }
   @keyframes fadeUp { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:translateY(0)} }
+
+  /* Warm editorial palette */
+  :root {
+    --bg: #f4efe9;
+    --surface: #fffaf5;
+    --surface2: #f0e7df;
+    --border: rgba(73, 38, 31, 0.14);
+    --border-active: rgba(184, 47, 39, 0.45);
+    --text: #2c211e;
+    --text-muted: #977c73;
+    --text-soft: #67534d;
+    --accent: #bd3028;
+    --accent2: #8f211f;
+    --green: #2e7658;
+    --red: #bd3028;
+    --amber: #aa6b24;
+    --glow: rgba(189, 48, 40, 0.14);
+  }
+
+  body::before, body::after { display: none; }
+  nav { background: rgba(244, 239, 233, 0.92); border-bottom-color: var(--border); }
+  .nav-logo .dot { background: var(--accent); box-shadow: 0 0 10px var(--glow); }
+  .nav-pill { background: var(--surface); }
+  .nav-pill.live { color: var(--green); background: rgba(46, 118, 88, 0.08); border-color: rgba(46, 118, 88, 0.25); }
+  .setup-card, .chat-panel, .code-panel { box-shadow: 0 18px 50px rgba(73, 38, 31, 0.08); }
+  .btn-launch { background: linear-gradient(135deg, #c23b31, #8f211f); box-shadow: 0 10px 24px rgba(141, 32, 29, 0.18); }
+  .btn-launch:hover:not(:disabled) { box-shadow: 0 12px 28px rgba(141, 32, 29, 0.25); }
+  .mode-tile.selected { background: rgba(189, 48, 40, 0.06); }
+  .msg.ai .msg-avatar { background: rgba(189, 48, 40, 0.08); border-color: rgba(189, 48, 40, 0.2); }
+  .msg.user .msg-avatar { background: rgba(46, 118, 88, 0.08); border-color: rgba(46, 118, 88, 0.2); }
+  .msg.user .msg-bubble { background: rgba(189, 48, 40, 0.08); border-color: rgba(189, 48, 40, 0.2); }
+  .speaking-indicator .bar { background: var(--accent); }
+  .record-btn { background: rgba(189, 48, 40, 0.07); border-color: rgba(189, 48, 40, 0.26); color: var(--accent); }
+  .record-btn:hover:not(:disabled) { background: rgba(189, 48, 40, 0.13); }
+  .lang-pill.active { color: var(--accent); border-color: rgba(189, 48, 40, 0.3); background: rgba(189, 48, 40, 0.06); }
+  .submit-code-btn { background: rgba(46, 118, 88, 0.08); border-color: rgba(46, 118, 88, 0.28); }
+  .submit-code-btn:hover { background: rgba(46, 118, 88, 0.14); }
+  .code-area { background: #2c211e; color: #f4d7b9; }
+  .code-area::placeholder { color: #b89c8e; }
+  @media (max-width: 760px) {
+    nav { padding: 16px 18px; }
+    .nav-pills { gap: 5px; }
+    .nav-pill { padding: 5px 9px; }
+    .setup-hero h1 { font-size: 2rem; }
+    .setup-card { padding: 20px; }
+  }
 </style>
 </head>
 <body>
@@ -753,7 +799,10 @@ async function startInterview() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ mode: selectedMode, company: selectedCompany, role })
     });
-    const data = await res.json();
+    const data = await readApiResponse(res);
+    if (typeof data.message !== 'string' || !data.message.trim()) {
+      throw new Error('The interviewer returned no opening question.');
+    }
     sessionId = data.session_id;
     await renderAIMessage(data.message);
     setStatus('Your turn — click Speak');
@@ -765,6 +814,9 @@ async function startInterview() {
 // ——— RENDER MESSAGE WITH WORD SYNC ———
 
 async function renderAIMessage(text) {
+  if (typeof text !== 'string' || !text.trim()) {
+    throw new Error('The interviewer returned an empty response.');
+  }
   const container = document.getElementById('chatMessages');
 
   // Add speaking indicator
@@ -872,7 +924,7 @@ async function processAudio() {
   fd.append('audio', blob, 'rec.webm');
   try {
     const tr = await fetch('/api/transcribe', { method:'POST', body:fd });
-    const td = await tr.json();
+    const td = await readApiResponse(tr);
     if (!td.text?.trim()) { setStatus('Nothing detected — try again'); return; }
 
     renderUserMessage(td.text);
@@ -883,7 +935,10 @@ async function processAudio() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ session_id: sessionId, message: td.text, code: '' })
     });
-    const rd = await rr.json();
+    const rd = await readApiResponse(rr);
+    if (typeof rd.message !== 'string' || !rd.message.trim()) {
+      throw new Error('The interviewer returned no response.');
+    }
     updateStage(rd.stage);
     exchangeCount = rd.exchange_count;
     document.getElementById('chipCount').textContent = exchangeCount;
@@ -912,7 +967,10 @@ async function submitCode() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ session_id: sessionId, message: msg, code })
     });
-    const rd = await rr.json();
+    const rd = await readApiResponse(rr);
+    if (typeof rd.message !== 'string' || !rd.message.trim()) {
+      throw new Error('The interviewer returned no response.');
+    }
     updateStage(rd.stage);
     exchangeCount = rd.exchange_count;
     document.getElementById('chipCount').textContent = exchangeCount;
@@ -944,6 +1002,10 @@ async function speakText(text) {
         window.speechSynthesis.speak(utt);
       });
     }
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.detail || `Speech synthesis failed (${res.status})`);
+    }
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     const audio = new Audio(url);
@@ -951,6 +1013,14 @@ async function speakText(text) {
     await audio.play();
     return new Promise(resolve => { audio.onended = resolve; audio.onerror = resolve; });
   } catch(e) { console.warn('TTS:', e); }
+}
+
+async function readApiResponse(response) {
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.detail || data.message || `Request failed (${response.status})`);
+  }
+  return data;
 }
 
 function updateStage(stage) {

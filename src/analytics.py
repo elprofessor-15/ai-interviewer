@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
+GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-20b")
 
 def analyze_interview(session: dict) -> dict:
     messages = session.get("messages", [])
@@ -61,7 +62,7 @@ Analyze this interview and return a JSON object with EXACTLY this structure (no 
 }}"""
 
     response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model=GROQ_MODEL,
         messages=[{"role": "user", "content": prompt}],
         max_tokens=1500
     )

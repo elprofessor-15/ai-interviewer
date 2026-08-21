@@ -14,6 +14,7 @@ load_dotenv()
 app = FastAPI()
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-20b")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
@@ -47,15 +48,13 @@ async def call_llm(messages: list, max_tokens: int = 200) -> str:
     if groq_client:
         try:
             res = groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model=GROQ_MODEL,
                 messages=messages,
                 max_tokens=max_tokens
             )
             return res.choices[0].message.content
         except Exception as e:
-            if "rate_limit" not in str(e).lower() and "429" not in str(e):
-                raise e
-            print("Groq LLM limit hit, trying Gemini...")
+            print(f"Groq LLM failed ({GROQ_MODEL}): {e}. Trying fallback providers...")
 
     # 2. Try Google Gemini
     if GOOGLE_API_KEY:
@@ -308,7 +307,10 @@ async def start_interview(request: Request):
         system_prompt += f"\n\nThe candidate's name is {user_name}. Use their name naturally."
 
     interview_sessions[session_id] = {
-        "messages": [{"role": "system", "content": system_prompt}],
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": "Begin the interview with your opening question."},
+        ],
         "mode": mode,
         "company": company,
         "role": role,
