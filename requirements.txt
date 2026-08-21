@@ -4,5 +4,6 @@ uvicorn
 python-multipart
 python-dotenv
 python-docx
+pypdf
 httpx
 numpy

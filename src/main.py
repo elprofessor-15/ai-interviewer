@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Request
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
@@ -7,6 +7,9 @@ import httpx
 from groq import Groq
 from dotenv import load_dotenv
 from collections import defaultdict
+from docx import Document
+from io import BytesIO
+from pypdf import PdfReader
 from src.rag import get_context
 
 load_dotenv()
@@ -41,6 +44,34 @@ def check_rate_limit(ip: str):
     request_counts[ip].append(now)
 
 interview_sessions = {}
+MAX_RESUME_BYTES = 5 * 1024 * 1024
+MAX_RESUME_CHARS = 8000
+
+def extract_resume_text(filename: str, content: bytes) -> str:
+    if len(content) > MAX_RESUME_BYTES:
+        raise HTTPException(status_code=413, detail="Resume must be 5 MB or smaller")
+
+    extension = os.path.splitext(filename.lower())[1]
+    try:
+        if extension == ".pdf":
+            text = "\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(content)).pages)
+        elif extension == ".docx":
+            document = Document(BytesIO(content))
+            text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+        elif extension == ".txt":
+            text = content.decode("utf-8")
+        else:
+            raise HTTPException(status_code=400, detail="Resume must be a PDF, DOCX, or TXT file")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        print(f"Resume extraction failed: {exc}")
+        raise HTTPException(status_code=400, detail="Could not read that resume file")
+
+    cleaned = " ".join(text.split())
+    if not cleaned:
+        raise HTTPException(status_code=400, detail="Resume did not contain readable text")
+    return cleaned[:MAX_RESUME_CHARS]
 
 # ── LLM with fallback chain: Groq → Gemini → OpenRouter ──
 async def call_llm(messages: list, max_tokens: int = 200) -> str:
@@ -295,13 +326,19 @@ Rules: 2-3 sentences max per response. ONE question at a time."""
 
 
 @app.post("/api/start-interview")
-async def start_interview(request: Request):
+async def start_interview(
+    request: Request,
+    mode: str = Form("behavioral"),
+    company: str = Form(""),
+    role: str = Form("SDE"),
+    user_name: str = Form(""),
+    resume: UploadFile | None = File(None),
+):
     check_rate_limit(request.client.host)
-    body = await request.json()
-    mode = body.get("mode", "behavioral")
-    company = (body.get("company") or "").lower()
-    role = body.get("role", "SDE")
-    user_name = body.get("user_name", "")
+    company = (company or "").lower()
+    resume_text = ""
+    if resume:
+        resume_text = extract_resume_text(resume.filename or "resume.txt", await resume.read())
 
     session_id = str(time.time())
 
@@ -310,6 +347,15 @@ async def start_interview(request: Request):
         system_prompt = build_company_prompt(company.capitalize(), role, context)
     else:
         system_prompt = SKILL_PROMPTS.get(mode, SKILL_PROMPTS["behavioral"])
+
+    if resume_text:
+        system_prompt += f"""
+
+--- CANDIDATE RESUME CONTEXT ---
+{resume_text}
+--- END RESUME CONTEXT ---
+
+Use this resume as the source of truth for the candidate's background. During the introduction, ask about specific projects, technologies, impact, or experiences from it. Do not invent details, and do not ask the candidate to repeat information already stated unless probing deeper. Keep questions conversational and appropriate for the selected interview type."""
 
     if user_name:
         system_prompt += f"\n\nThe candidate's name is {user_name}. Use their name naturally."
@@ -323,6 +369,7 @@ async def start_interview(request: Request):
         "company": company,
         "role": role,
         "user_name": user_name,
+        "resume_text": resume_text,
         "exchange_count": 0,
         "start_time": time.time()
     }
