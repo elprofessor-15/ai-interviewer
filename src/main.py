@@ -47,12 +47,20 @@ async def call_llm(messages: list, max_tokens: int = 200) -> str:
     # 1. Try Groq
     if groq_client:
         try:
+            groq_options = {
+                "model": GROQ_MODEL,
+                "messages": messages,
+                "max_tokens": max_tokens,
+            }
+            if GROQ_MODEL.startswith("openai/gpt-oss"):
+                groq_options["reasoning_effort"] = "low"
             res = groq_client.chat.completions.create(
-                model=GROQ_MODEL,
-                messages=messages,
-                max_tokens=max_tokens
+                **groq_options
             )
-            return res.choices[0].message.content
+            content = (res.choices[0].message.content or "").strip()
+            if content:
+                return content
+            raise RuntimeError("Groq returned an empty response")
         except Exception as e:
             print(f"Groq LLM failed ({GROQ_MODEL}): {e}. Trying fallback providers...")
 
