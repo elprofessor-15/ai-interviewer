@@ -11,6 +11,8 @@ from docx import Document
 from io import BytesIO
 from pypdf import PdfReader
 from src.rag import get_context
+from src.analytics import analyze_interview
+from src.interview_templates import build_interview_template, compact_messages, stage_for_exchange
 
 load_dotenv()
 
@@ -342,11 +344,19 @@ async def start_interview(
 
     session_id = str(time.time())
 
+    company_context = ""
     if mode == "company" and company:
-        context = get_context(company, f"{role} interview questions {company} coding behavioral", n=8)
-        system_prompt = build_company_prompt(company.capitalize(), role, context)
-    else:
-        system_prompt = SKILL_PROMPTS.get(mode, SKILL_PROMPTS["behavioral"])
+        company_context = get_context(company, f"{role} interview questions {company} coding behavioral", n=5)
+
+    system_prompt = build_interview_template(
+        mode=mode,
+        role=role,
+        company=company.capitalize() if company else "",
+        resume_context=resume_text,
+        stage="introduction",
+    )
+    if company_context:
+        system_prompt += f"\nCompany interview context:\n{company_context}"
 
     if resume_text:
         system_prompt += f"""
@@ -370,11 +380,12 @@ Use this resume as the source of truth for the candidate's background. During th
         "role": role,
         "user_name": user_name,
         "resume_text": resume_text,
+        "company_context": company_context,
         "exchange_count": 0,
         "start_time": time.time()
     }
 
-    ai_message = await call_llm(interview_sessions[session_id]["messages"], max_tokens=150)
+    ai_message = await call_llm(compact_messages(interview_sessions[session_id]), max_tokens=150)
     interview_sessions[session_id]["messages"].append({"role": "assistant", "content": ai_message})
     return {"session_id": session_id, "message": ai_message}
 
@@ -399,6 +410,8 @@ async def get_response(request: Request):
         raise HTTPException(status_code=404, detail="Session not found")
 
     session = interview_sessions[session_id]
+    if session.get("ended"):
+        raise HTTPException(status_code=409, detail="Interview has ended")
     full_message = user_message
     if code.strip():
         full_message += f"\n\n[Candidate submitted code]:\n```\n{code}\n```\nReview: correctness, time/space complexity, edge cases, style. Then continue."
@@ -415,10 +428,34 @@ async def get_response(request: Request):
                 "content": f"Relevant context from real interview experiences:\n{context}"
             })
 
-    stage = "introduction" if count <= 3 else "technical" if count <= 8 else "behavioral" if count <= 11 else "closing"
-    ai_message = await call_llm(session["messages"], max_tokens=200)
+    stage = stage_for_exchange(count)
+    session["messages"][0]["content"] = build_interview_template(
+        mode=session["mode"],
+        role=session["role"],
+        company=session["company"].capitalize() if session["company"] else "",
+        resume_context=session.get("resume_text", ""),
+        stage=stage,
+    )
+    if session.get("company_context"):
+        session["messages"][0]["content"] += f"\nCompany interview context:\n{session['company_context']}"
+    ai_message = await call_llm(compact_messages(session), max_tokens=200)
     session["messages"].append({"role": "assistant", "content": ai_message})
     return {"message": ai_message, "stage": stage, "exchange_count": count}
+
+
+@app.post("/api/end-interview")
+async def end_interview(request: Request):
+    check_rate_limit(request.client.host)
+    body = await request.json()
+    session_id = body.get("session_id")
+    if not session_id or session_id not in interview_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    session = interview_sessions[session_id]
+    if session.get("ended"):
+        return {"feedback": session.get("feedback", {})}
+    session["ended"] = True
+    session["feedback"] = analyze_interview(session)
+    return {"feedback": session["feedback"]}
 
 
 @app.post("/api/synthesize")

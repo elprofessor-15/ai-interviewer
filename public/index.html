@@ -460,6 +460,19 @@
     transition: all 0.2s;
   }
   .end-btn:hover { border-color: rgba(252,129,129,0.5); color: var(--red); }
+  .feedback-panel { display: none; position: fixed; inset: 0; z-index: 200; padding: 24px; background: rgba(44, 33, 30, 0.48); overflow-y: auto; }
+  .feedback-panel.visible { display: flex; align-items: center; justify-content: center; }
+  .feedback-card { width: min(760px, 100%); max-height: 90vh; overflow-y: auto; padding: 30px; border-radius: 18px; background: var(--surface); color: var(--text); box-shadow: 0 24px 80px rgba(44, 33, 30, 0.28); }
+  .feedback-head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; margin-bottom: 22px; }
+  .feedback-head h2 { font-size: 1.45rem; font-weight: 600; }
+  .feedback-score { color: var(--accent); font-size: 2rem; font-weight: 600; }
+  .feedback-summary { color: var(--text-soft); line-height: 1.6; margin-bottom: 20px; }
+  .feedback-section { margin-top: 18px; }
+  .feedback-section h3 { color: var(--accent); font-size: 0.72rem; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 9px; }
+  .feedback-list { display: grid; gap: 8px; padding-left: 18px; color: var(--text-soft); line-height: 1.5; }
+  .feedback-item strong { color: var(--text); }
+  .feedback-actions { display: flex; justify-content: flex-end; margin-top: 24px; }
+  .feedback-close { padding: 10px 16px; border: 0; border-radius: 9px; background: var(--accent); color: #fffaf5; cursor: pointer; font: inherit; }
 
   /* CODE PANEL */
   .code-panel {
@@ -706,7 +719,7 @@
             <span id="recLabel">Speak</span>
           </button>
           <div class="status-text" id="statusText">Ready to begin</div>
-          <button class="end-btn" onclick="endInterview()">End</button>
+          <button class="end-btn" onclick="endAndGetFeedback()">End & feedback</button>
         </div>
       </div>
 
@@ -746,6 +759,20 @@ def solution():
   </div>
 
 </main>
+
+<div class="feedback-panel" id="feedbackPanel" role="dialog" aria-modal="true" aria-labelledby="feedbackTitle">
+  <div class="feedback-card">
+    <div class="feedback-head">
+      <div><div class="setup-label">Interview review</div><h2 id="feedbackTitle">Your feedback</h2></div>
+      <div class="feedback-score" id="feedbackScore">—</div>
+    </div>
+    <div class="feedback-summary" id="feedbackSummary"></div>
+    <div class="feedback-section"><h3>What worked</h3><div class="feedback-list" id="feedbackStrengths"></div></div>
+    <div class="feedback-section"><h3>Where to improve</h3><div class="feedback-list" id="feedbackGaps"></div></div>
+    <div class="feedback-section"><h3>Next practice steps</h3><div class="feedback-list" id="feedbackSteps"></div></div>
+    <div class="feedback-actions"><button class="feedback-close" onclick="closeFeedback()">Start another interview</button></div>
+  </div>
+</div>
 
 <script>
 let sessionId = null;
@@ -1071,6 +1098,40 @@ document.getElementById('resumeInput').addEventListener('change', event => {
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+async function endAndGetFeedback() {
+  if (!sessionId) return;
+  setStatus('Preparing your feedback...');
+  document.getElementById('recordBtn').disabled = true;
+  try {
+    const response = await fetch('/api/end-interview', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({session_id: sessionId})
+    });
+    const data = await readApiResponse(response);
+    renderFeedback(data.feedback || {});
+    document.getElementById('feedbackPanel').classList.add('visible');
+  } catch (error) {
+    setStatus('Feedback error: ' + error.message);
+    document.getElementById('recordBtn').disabled = false;
+  }
+}
+
+function renderFeedback(feedback) {
+  document.getElementById('feedbackScore').textContent = feedback.overall_score != null ? `${feedback.overall_score}/100` : '—';
+  document.getElementById('feedbackSummary').textContent = feedback.summary || feedback.error || 'No feedback was available.';
+  const items = (entries, detailKey) => (entries || []).map(item => `<div class="feedback-item"><strong>${escapeHtml(item.title || '')}</strong>${item[detailKey] ? ` — ${escapeHtml(item[detailKey])}` : ''}</div>`).join('');
+  document.getElementById('feedbackStrengths').innerHTML = items(feedback.strong_points, 'detail');
+  document.getElementById('feedbackGaps').innerHTML = items(feedback.pain_points, 'detail') || items(feedback.areas_of_improvement, 'action');
+  document.getElementById('feedbackSteps').innerHTML = (feedback.next_steps || []).map(step => `<div class="feedback-item">${escapeHtml(step)}</div>`).join('');
+}
+
+function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char])); }
+
+function closeFeedback() {
+  document.getElementById('feedbackPanel').classList.remove('visible');
+  endInterview();
+}
+
 function endInterview() {
   sessionId = null;
   if (currentAudio) { currentAudio.pause(); currentAudio = null; }
@@ -1083,6 +1144,7 @@ function endInterview() {
   document.querySelectorAll('.mode-tile,.co-tile').forEach(t => t.classList.remove('selected'));
   document.getElementById('companySection').classList.remove('visible');
   document.getElementById('launchBtn').disabled = true;
+  document.getElementById('recordBtn').disabled = false;
   document.getElementById('chipCount').textContent = '0';
 }
 

@@ -4,7 +4,8 @@ from groq import Groq
 from dotenv import load_dotenv
 
 load_dotenv()
-client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
+api_key = os.environ.get("GROQ_API_KEY", "")
+client = Groq(api_key=api_key) if api_key else None
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-20b")
 
 def analyze_interview(session: dict) -> dict:
@@ -22,19 +23,21 @@ def analyze_interview(session: dict) -> dict:
             transcript += f"INTERVIEWER: {m['content']}\n\n"
 
     if not transcript.strip():
-        return {}
+      return {"error": "No interview answers were recorded."}
+    if not client:
+      return {"error": "Feedback is unavailable because no LLM provider is configured."}
 
-    prompt = f"""You are an expert interview coach analyzing a {mode} interview for a {role} role{' at ' + company.capitalize() if company else ''}.
+    prompt = f"""You are an exacting but supportive interview coach analyzing a {mode} interview for a {role} role{' at ' + company.capitalize() if company else ''}.
 
 Here is the full interview transcript:
 ---
 {transcript[:6000]}
 ---
 
-Analyze this interview and return a JSON object with EXACTLY this structure (no extra text, just valid JSON):
+Analyze evidence from the candidate's actual answers. Do not praise generic traits or invent details. Return ONLY valid JSON with EXACTLY this structure:
 {{
   "overall_score": <number 0-100>,
-  "summary": "<2-3 sentence honest overall assessment>",
+  "summary": "<2-3 sentence honest assessment naming the clearest evidence>",
   "strong_points": [
     {{"title": "<strength title>", "detail": "<specific example from interview>"}},
     {{"title": "<strength title>", "detail": "<specific example from interview>"}},
@@ -58,14 +61,21 @@ Analyze this interview and return a JSON object with EXACTLY this structure (no 
     "cultural_fit": <0-100>
   }},
   "hiring_verdict": "<Strong Hire | Hire | Maybe | No Hire>",
-  "verdict_reason": "<one sentence explanation>"
+  "verdict_reason": "<one sentence explanation grounded in the transcript>",
+  "next_steps": [
+    "<a concrete practice exercise for this week>",
+    "<a concrete practice exercise for the next interview>"
+  ]
 }}"""
 
-    response = client.chat.completions.create(
-        model=GROQ_MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=1500
-    )
+    options = {
+      "model": GROQ_MODEL,
+      "messages": [{"role": "user", "content": prompt}],
+      "max_tokens": 1200,
+    }
+    if GROQ_MODEL.startswith("openai/gpt-oss"):
+      options["reasoning_effort"] = "low"
+    response = client.chat.completions.create(**options)
 
     raw = response.choices[0].message.content.strip()
     # Strip markdown if present
@@ -76,6 +86,10 @@ Analyze this interview and return a JSON object with EXACTLY this structure (no 
     raw = raw.strip()
 
     try:
-        return json.loads(raw)
+      result = json.loads(raw)
+      required = ["overall_score", "summary", "strong_points", "pain_points", "areas_of_improvement", "skill_scores", "hiring_verdict", "verdict_reason", "next_steps"]
+      if not all(key in result for key in required):
+        return {"error": "Feedback response was incomplete", "raw": raw}
+      return result
     except Exception:
         return {"error": "Could not parse analysis", "raw": raw}
