@@ -476,6 +476,9 @@ async def synthesize_speech(request: Request):
 
 @app.get("/")
 async def serve_index():
-    return FileResponse("public/index.html")
+    return FileResponse(
+        "public/index.html",
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
+    )
 
 app.mount("/", StaticFiles(directory="public"), name="static")
