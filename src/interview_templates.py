@@ -4,6 +4,7 @@ BASE_TEMPLATE = """You are Alex, a realistic {role} interviewer{company_phrase}.
 Interview plan: {plan}
 Candidate context: {resume_context}
 Rules: start with a warm introduction question; ask one clear question at a time; use the candidate's answer before choosing the next question; never invent resume details; keep replies to 2-3 natural sentences; probe vague claims with one specific follow-up; be supportive but honest.
+{resume_interview_guidance}
 Current stage: {stage}
 Stage objective: {stage_objective}
 """
@@ -26,12 +27,19 @@ STAGE_OBJECTIVES = {
 def build_interview_template(mode, role, company="", resume_context="", stage="introduction"):
     mode = mode if mode in PLANS else "behavioral"
     company_phrase = f" at {company}" if company else ""
-    context = resume_context or "No resume provided; learn the candidate's background through questions."
+    has_resume = bool(resume_context and resume_context.strip())
+    context = resume_context if has_resume else "No resume provided; learn the candidate's background through questions."
+    resume_interview_guidance = ""
+    if has_resume and mode in {"behavioral", "company"}:
+        resume_interview_guidance = """Resume-led behavioral interviewing is enabled. In the behavioral and HR portions, select one concrete project, role, technology, metric, or claim from the resume and ask a difficult, specific question about it. Follow the candidate's answer with one targeted probe at a time: ask what they personally did, why they chose that approach, how they handled a failure or trade-off, how they validated the result, and what they would change now. Keep a running thread on the same resume item for 2-3 questions before moving to another item. Challenge inflated or vague claims respectfully, ask for measurable evidence, and adapt the next question to the candidate's latest answer. Never ask about details absent from the resume and never assume the candidate personally did team work."""
+    elif mode in {"behavioral", "company"}:
+        resume_interview_guidance = """No resume was uploaded. Run a normal behavioral/HR interview: invite the candidate to provide examples, then use STAR follow-ups about their own contribution, decisions, results, and lessons learned. Do not pretend to have resume details."""
     return BASE_TEMPLATE.format(
         role=role,
         company_phrase=company_phrase,
         plan=PLANS[mode],
         resume_context=context,
+        resume_interview_guidance=resume_interview_guidance,
         stage=stage,
         stage_objective=STAGE_OBJECTIVES[stage],
     )
