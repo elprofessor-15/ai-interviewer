@@ -524,6 +524,8 @@
     resize: none;
     outline: none;
     tab-size: 2;
+    white-space: pre;
+    overflow: auto;
   }
   .code-area::placeholder { color: var(--text-muted); font-style: italic; }
 
@@ -1181,13 +1183,105 @@ function endInterview() {
   document.getElementById('chipCount').textContent = '0';
 }
 
-// Tab key in code area
-document.getElementById('codeArea').addEventListener('keydown', e => {
-  if (e.key === 'Tab') {
-    e.preventDefault();
-    const s = e.target.selectionStart;
-    e.target.value = e.target.value.substring(0,s) + '  ' + e.target.value.substring(e.target.selectionEnd);
-    e.target.selectionStart = e.target.selectionEnd = s + 2;
+// Lightweight editor behavior for interview coding.
+const codeArea = document.getElementById('codeArea');
+const indentUnit = '  ';
+const pairedCharacters = {'(': ')', '[': ']', '{': '}', '"': '"', "'": "'"};
+
+function replaceCodeSelection(insertedText, selectionStart, selectionEnd = selectionStart) {
+  const value = codeArea.value;
+  codeArea.value = value.substring(0, codeArea.selectionStart) + insertedText + value.substring(codeArea.selectionEnd);
+  codeArea.selectionStart = selectionStart;
+  codeArea.selectionEnd = selectionEnd;
+}
+
+function indentSelection(direction) {
+  const value = codeArea.value;
+  const start = codeArea.selectionStart;
+  const end = codeArea.selectionEnd;
+  const blockStart = value.lastIndexOf('\n', start - 1) + 1;
+  const blockEndIndex = value.indexOf('\n', end);
+  const blockEnd = blockEndIndex === -1 ? value.length : blockEndIndex;
+  const block = value.slice(blockStart, blockEnd);
+  const lines = block.split('\n');
+  const updated = lines.map(line => {
+    if (direction > 0) return indentUnit + line;
+    return line.startsWith(indentUnit) ? line.slice(indentUnit.length) : line.replace(/^\t/, '');
+  });
+  const replacement = updated.join('\n');
+  codeArea.value = value.slice(0, blockStart) + replacement + value.slice(blockEnd);
+  const adjustment = replacement.length - block.length;
+  codeArea.selectionStart = Math.max(blockStart, start + (direction > 0 ? indentUnit.length : Math.min(0, adjustment)));
+  codeArea.selectionEnd = Math.max(codeArea.selectionStart, end + adjustment);
+}
+
+codeArea.addEventListener('keydown', event => {
+  const start = codeArea.selectionStart;
+  const end = codeArea.selectionEnd;
+  const value = codeArea.value;
+  const selectedText = value.slice(start, end);
+
+  if (event.key === 'Tab') {
+    event.preventDefault();
+    if (start !== end && selectedText.includes('\n')) {
+      indentSelection(event.shiftKey ? -1 : 1);
+      return;
+    }
+    if (event.shiftKey) {
+      const lineStart = value.lastIndexOf('\n', start - 1) + 1;
+      const linePrefix = value.slice(lineStart, start);
+      const removeCount = linePrefix.endsWith(indentUnit) ? indentUnit.length : linePrefix.endsWith('\t') ? 1 : 0;
+      if (removeCount) {
+        codeArea.value = value.slice(0, start - removeCount) + value.slice(start);
+        codeArea.selectionStart = codeArea.selectionEnd = start - removeCount;
+      }
+    } else {
+      codeArea.value = value.slice(0, start) + indentUnit + value.slice(end);
+      codeArea.selectionStart = codeArea.selectionEnd = start + indentUnit.length;
+    }
+    return;
+  }
+
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    const lineStart = value.lastIndexOf('\n', start - 1) + 1;
+    const lineBeforeCursor = value.slice(lineStart, start);
+    const currentIndent = lineBeforeCursor.match(/^\s*/)[0];
+    const trimmedBeforeCursor = lineBeforeCursor.trimEnd();
+    const nextCharacter = value[end];
+    let nextIndent = currentIndent;
+    if (/[{[(]$/.test(trimmedBeforeCursor) || /:\s*(#.*)?$/.test(trimmedBeforeCursor)) {
+      nextIndent += indentUnit;
+    }
+    if (nextCharacter === '}' || nextCharacter === ']' || nextCharacter === ')') {
+      nextIndent = nextIndent.slice(0, Math.max(0, nextIndent.length - indentUnit.length));
+    }
+    const insertion = '\n' + nextIndent;
+    codeArea.value = value.slice(0, start) + insertion + value.slice(end);
+    codeArea.selectionStart = codeArea.selectionEnd = start + insertion.length;
+    return;
+  }
+
+  if (event.key in pairedCharacters && start !== end) {
+    event.preventDefault();
+    const closing = pairedCharacters[event.key];
+    codeArea.value = value.slice(0, start) + event.key + selectedText + closing + value.slice(end);
+    codeArea.selectionStart = start + 1;
+    codeArea.selectionEnd = end + 1;
+    return;
+  }
+
+  if (event.key in pairedCharacters) {
+    const closing = pairedCharacters[event.key];
+    const nextCharacter = value[end];
+    if (nextCharacter === closing && event.key !== '"' && event.key !== "'") {
+      event.preventDefault();
+      codeArea.selectionStart = codeArea.selectionEnd = end + 1;
+      return;
+    }
+    event.preventDefault();
+    codeArea.value = value.slice(0, start) + event.key + closing + value.slice(end);
+    codeArea.selectionStart = codeArea.selectionEnd = start + 1;
   }
 });
 </script>
