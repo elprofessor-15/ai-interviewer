@@ -85,7 +85,12 @@
     background: var(--accent);
     box-shadow: 0 0 8px var(--accent);
   }
-  .nav-pills { display: flex; gap: 8px; }
+  .nav-pills { display: flex; gap: 8px; align-items: center; }
+  .auth-control { display: flex; align-items: center; gap: 8px; }
+  .auth-link { padding: 6px 12px; border: 1px solid var(--border); border-radius: 8px; color: var(--text-soft); background: var(--surface); font: inherit; font-size: 0.75rem; text-decoration: none; cursor: pointer; }
+  .auth-link:hover { color: var(--accent); border-color: var(--border-active); }
+  .user-name { display: none; color: var(--text-soft); font-size: 0.75rem; }
+  .user-name.visible { display: block; }
   .nav-pill {
     padding: 5px 14px;
     border-radius: 20px;
@@ -159,6 +164,12 @@
     padding: 28px;
     margin-bottom: 16px;
   }
+  .session-history { display: none; margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--border); }
+  .session-history.visible { display: block; }
+  .session-list { display: grid; gap: 8px; max-height: 180px; overflow-y: auto; }
+  .session-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text-soft); font-size: 0.78rem; }
+  .session-item button { border: 0; background: transparent; color: var(--accent); cursor: pointer; font: inherit; font-size: 0.75rem; }
+  .session-empty { color: var(--text-muted); font-size: 0.78rem; }
   .setup-label {
     font-size: 0.7rem;
     font-weight: 600;
@@ -626,6 +637,7 @@
   <div class="nav-pills">
     <div class="nav-pill" id="navMode">—</div>
     <div class="nav-pill live hidden" id="navLive">Live</div>
+    <div class="auth-control"><span class="user-name" id="userName"></span><a class="auth-link" id="authLink" href="/auth/login">Sign in with Google</a></div>
   </div>
 </nav>
 
@@ -686,6 +698,10 @@
           <input class="resume-input" id="resumeInput" type="file" accept=".pdf,.docx,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain" />
           <div class="resume-help">PDF, DOCX, or TXT · up to 5 MB. Alex will use your projects and experience for sharper introduction questions.</div>
           <div class="resume-status" id="resumeStatus" aria-live="polite"></div>
+        </div>
+        <div class="session-history" id="sessionHistory">
+          <div class="setup-label">Saved interviews</div>
+          <div class="session-list" id="sessionList"></div>
         </div>
       </div>
 
@@ -793,6 +809,74 @@ let selectedCompany = null;
 let currentAudio = null;
 let currentLang = 'python';
 let isSpeaking = false;
+let currentUser = null;
+
+async function loadAuthState() {
+  try {
+    const response = await fetch('/api/auth/me');
+    const data = await response.json();
+    currentUser = data.user || null;
+    const authLink = document.getElementById('authLink');
+    const userName = document.getElementById('userName');
+    if (currentUser) {
+      userName.textContent = currentUser.name || currentUser.email;
+      userName.classList.add('visible');
+      authLink.textContent = 'Sign out';
+      authLink.href = '#';
+      authLink.onclick = async event => {
+        event.preventDefault();
+        await fetch('/auth/logout', {method: 'POST'});
+        window.location.reload();
+      };
+      loadSavedSessions();
+    }
+  } catch (error) {
+    console.warn('Authentication state unavailable:', error);
+  }
+}
+
+async function loadSavedSessions() {
+  const response = await fetch('/api/sessions');
+  if (!response.ok) return;
+  const data = await response.json();
+  const history = document.getElementById('sessionHistory');
+  const list = document.getElementById('sessionList');
+  history.classList.add('visible');
+  if (!data.sessions.length) {
+    list.innerHTML = '<div class="session-empty">No saved interviews yet.</div>';
+    return;
+  }
+  list.innerHTML = data.sessions.map(item => {
+    const label = `${item.mode}${item.company ? ` · ${item.company}` : ''} · ${new Date(item.started_at * 1000).toLocaleDateString()}`;
+    return `<div class="session-item"><span>${escapeHtml(label)}</span><button onclick="viewSavedSession('${item.id}')">View</button></div>`;
+  }).join('');
+}
+
+async function viewSavedSession(interviewId) {
+  const response = await fetch(`/api/sessions/${encodeURIComponent(interviewId)}`);
+  if (!response.ok) return;
+  const interview = await response.json();
+  document.getElementById('setupScreen').classList.add('hidden');
+  document.getElementById('interviewScreen').classList.add('active');
+  document.getElementById('chipMode').textContent = ` ${interview.mode}`;
+  document.getElementById('chipCo').textContent = interview.company ? ` ${interview.company}` : ' N/A';
+  document.getElementById('chipRole').textContent = ` ${interview.role}`;
+  document.getElementById('navMode').textContent = interview.mode;
+  document.getElementById('navLive').classList.remove('hidden');
+  document.getElementById('recordBtn').disabled = true;
+  document.querySelector('.end-btn').disabled = true;
+  document.getElementById('codeArea').disabled = true;
+  const container = document.getElementById('chatMessages');
+  container.innerHTML = '';
+  interview.transcript.forEach(message => {
+    const role = message.role === 'assistant' ? 'Interviewer' : 'You';
+    const div = document.createElement('div');
+    div.className = `msg ${message.role === 'assistant' ? 'ai' : 'user'}`;
+    div.innerHTML = `<div class="msg-avatar">${message.role === 'assistant' ? '🤖' : '👤'}</div><div><div class="msg-name">${role}</div><div class="msg-bubble">${escapeHtml(message.content)}</div></div>`;
+    container.appendChild(div);
+  });
+  container.scrollTop = container.scrollHeight;
+}
 
 // ——— SETUP ———
 
@@ -832,6 +916,7 @@ async function startInterview() {
   document.getElementById('setupScreen').classList.add('hidden');
   const is = document.getElementById('interviewScreen');
   is.classList.add('active');
+  document.getElementById('codeArea').disabled = false;
 
   document.getElementById('chipMode').textContent = ' ' + selectedMode;
   document.getElementById('chipCo').textContent = selectedCompany ? ' ' + selectedCompany : ' N/A';
@@ -1180,6 +1265,7 @@ function endInterview() {
   document.getElementById('companySection').classList.remove('visible');
   document.getElementById('launchBtn').disabled = true;
   document.getElementById('recordBtn').disabled = false;
+  document.getElementById('codeArea').disabled = false;
   document.getElementById('chipCount').textContent = '0';
 }
 
@@ -1284,6 +1370,8 @@ codeArea.addEventListener('keydown', event => {
     codeArea.selectionStart = codeArea.selectionEnd = start + 1;
   }
 });
+
+loadAuthState();
 </script>
 </body>
 </html>

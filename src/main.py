@@ -1,9 +1,11 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.sessions import SessionMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, StreamingResponse
-import os, tempfile, time
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
+import os, secrets, tempfile, time
 import httpx
+from authlib.integrations.starlette_client import OAuth, OAuthError
 from groq import Groq
 from dotenv import load_dotenv
 from collections import defaultdict
@@ -13,10 +15,31 @@ from pypdf import PdfReader
 from src.rag import get_context
 from src.analytics import analyze_interview
 from src.interview_templates import build_interview_template, compact_messages, stage_for_exchange
+from src.storage import get_interview, get_user, init_db, list_interviews, save_interview, upsert_user
 
 load_dotenv()
 
 app = FastAPI()
+
+SESSION_SECRET = os.environ.get("SESSION_SECRET", "")
+if not SESSION_SECRET:
+    SESSION_SECRET = secrets.token_urlsafe(32)
+COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "true" if os.environ.get("SPACE_ID") else "false").lower() == "true"
+app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET, https_only=COOKIE_SECURE, same_site="lax", max_age=60 * 60 * 24 * 14)
+
+oauth = OAuth()
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+if GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET:
+    oauth.register(
+        name="google",
+        client_id=GOOGLE_CLIENT_ID,
+        client_secret=GOOGLE_CLIENT_SECRET,
+        server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
+        client_kwargs={"scope": "openid email profile"},
+    )
+
+init_db()
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-20b")
@@ -49,6 +72,18 @@ interview_sessions = {}
 MAX_RESUME_BYTES = 5 * 1024 * 1024
 MAX_RESUME_CHARS = 8000
 
+
+def current_user(request: Request):
+    user_id = request.session.get("user_id")
+    return get_user(user_id) if user_id else None
+
+
+def require_user(request: Request):
+    user = current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Sign in with Google to access saved interviews")
+    return user
+
 def extract_resume_text(filename: str, content: bytes) -> str:
     if len(content) > MAX_RESUME_BYTES:
         raise HTTPException(status_code=413, detail="Resume must be 5 MB or smaller")
@@ -74,6 +109,61 @@ def extract_resume_text(filename: str, content: bytes) -> str:
     if not cleaned:
         raise HTTPException(status_code=400, detail="Resume did not contain readable text")
     return cleaned[:MAX_RESUME_CHARS]
+
+
+@app.get("/auth/login")
+async def google_login(request: Request):
+    if not (GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET):
+        raise HTTPException(status_code=503, detail="Google sign-in is not configured")
+    redirect_uri = request.url_for("google_callback")
+    return await oauth.google.authorize_redirect(request, redirect_uri)
+
+
+@app.get("/auth/callback", name="google_callback")
+async def google_callback(request: Request):
+    if not (GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET):
+        raise HTTPException(status_code=503, detail="Google sign-in is not configured")
+    try:
+        token = await oauth.google.authorize_access_token(request)
+        userinfo = token.get("userinfo") or await oauth.google.userinfo(token=token)
+    except (OAuthError, KeyError, ValueError) as exc:
+        print(f"Google sign-in failed: {exc}")
+        raise HTTPException(status_code=401, detail="Google sign-in could not be completed")
+
+    google_sub = userinfo.get("sub")
+    email = userinfo.get("email")
+    if not google_sub or not email or userinfo.get("email_verified") is False:
+        raise HTTPException(status_code=401, detail="Google account email could not be verified")
+    user = upsert_user(google_sub, email, userinfo.get("name", ""), userinfo.get("picture", ""))
+    request.session["user_id"] = user["id"]
+    return RedirectResponse(url="/", status_code=303)
+
+
+@app.post("/auth/logout")
+async def google_logout(request: Request):
+    request.session.clear()
+    return {"ok": True}
+
+
+@app.get("/api/auth/me")
+async def auth_me(request: Request):
+    user = current_user(request)
+    return {"authenticated": bool(user), "user": user}
+
+
+@app.get("/api/sessions")
+async def saved_sessions(request: Request):
+    user = require_user(request)
+    return {"sessions": list_interviews(user["id"])}
+
+
+@app.get("/api/sessions/{interview_id}")
+async def saved_session(request: Request, interview_id: str):
+    user = require_user(request)
+    interview = get_interview(user["id"], interview_id)
+    if not interview:
+        raise HTTPException(status_code=404, detail="Saved interview not found")
+    return interview
 
 # ── LLM with fallback chain: Groq → Gemini → OpenRouter ──
 async def call_llm(messages: list, max_tokens: int = 200) -> str:
@@ -385,8 +475,14 @@ Use this resume as the source of truth for the candidate's background. During th
         "start_time": time.time()
     }
 
+    user = current_user(request)
+    if user:
+        interview_sessions[session_id]["user_id"] = user["id"]
+
     ai_message = await call_llm(compact_messages(interview_sessions[session_id]), max_tokens=150)
     interview_sessions[session_id]["messages"].append({"role": "assistant", "content": ai_message})
+    if user:
+        save_interview(session_id, user["id"], interview_sessions[session_id])
     return {"session_id": session_id, "message": ai_message}
 
 
@@ -440,6 +536,8 @@ async def get_response(request: Request):
         session["messages"][0]["content"] += f"\nCompany interview context:\n{session['company_context']}"
     ai_message = await call_llm(compact_messages(session), max_tokens=200)
     session["messages"].append({"role": "assistant", "content": ai_message})
+    if session.get("user_id"):
+        save_interview(session_id, session["user_id"], session)
     return {"message": ai_message, "stage": stage, "exchange_count": count}
 
 
@@ -455,6 +553,8 @@ async def end_interview(request: Request):
         return {"feedback": session.get("feedback", {})}
     session["ended"] = True
     session["feedback"] = analyze_interview(session)
+    if session.get("user_id"):
+        save_interview(session_id, session["user_id"], session, session["feedback"])
     return {"feedback": session["feedback"]}
 
 
