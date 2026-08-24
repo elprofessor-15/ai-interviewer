@@ -460,10 +460,15 @@
     transition: all 0.2s;
   }
   .end-btn:hover { border-color: rgba(252,129,129,0.5); color: var(--red); }
+  .view-feedback-btn { display: none; padding: 8px 14px; background: rgba(189,48,40,0.08); border: 1px solid rgba(189,48,40,0.25); border-radius: 8px; color: var(--accent); font-family: 'DM Sans', sans-serif; font-size: 0.78rem; cursor: pointer; }
+  .view-feedback-btn.visible { display: block; }
   .feedback-panel { display: none; position: fixed; inset: 0; z-index: 200; padding: 24px; background: rgba(44, 33, 30, 0.48); overflow-y: auto; }
   .feedback-panel.visible { display: flex; align-items: center; justify-content: center; }
   .feedback-card { width: min(760px, 100%); max-height: 90vh; overflow-y: auto; padding: 30px; border-radius: 18px; background: var(--surface); color: var(--text); box-shadow: 0 24px 80px rgba(44, 33, 30, 0.28); }
   .feedback-head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; margin-bottom: 22px; }
+  .feedback-title-row { display: flex; align-items: flex-start; gap: 16px; }
+  .feedback-dismiss { width: 32px; height: 32px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: var(--text-soft); font-size: 1.25rem; line-height: 1; cursor: pointer; }
+  .feedback-dismiss:hover { color: var(--accent); border-color: var(--border-active); }
   .feedback-head h2 { font-size: 1.45rem; font-weight: 600; }
   .feedback-score { color: var(--accent); font-size: 2rem; font-weight: 600; }
   .feedback-summary { color: var(--text-soft); line-height: 1.6; margin-bottom: 20px; }
@@ -719,6 +724,7 @@
             <span id="recLabel">Speak</span>
           </button>
           <div class="status-text" id="statusText">Ready to begin</div>
+          <button class="view-feedback-btn" id="viewFeedbackBtn" onclick="showFeedback()">View feedback</button>
           <button class="end-btn" onclick="endAndGetFeedback()">End & feedback</button>
         </div>
       </div>
@@ -763,7 +769,7 @@ def solution():
 <div class="feedback-panel" id="feedbackPanel" role="dialog" aria-modal="true" aria-labelledby="feedbackTitle">
   <div class="feedback-card">
     <div class="feedback-head">
-      <div><div class="setup-label">Interview review</div><h2 id="feedbackTitle">Your feedback</h2></div>
+      <div class="feedback-title-row"><button class="feedback-dismiss" aria-label="Close feedback" title="Close feedback" onclick="hideFeedback()">×</button><div><div class="setup-label">Interview review</div><h2 id="feedbackTitle">Your feedback</h2></div></div>
       <div class="feedback-score" id="feedbackScore">—</div>
     </div>
     <div class="feedback-summary" id="feedbackSummary"></div>
@@ -877,12 +883,14 @@ async function renderAIMessage(text) {
   container.appendChild(speakRow);
   container.scrollTop = container.scrollHeight;
 
+  const speakableText = cleanTextForSpeech(text);
+
   // Start audio in parallel
   isSpeaking = true;
-  const audioPromise = speakText(text);
+  const audioPromise = speakText(speakableText);
 
   // Estimate duration from text length (~130 words/min speaking rate)
-  const words = text.split(' ');
+  const words = speakableText.split(/\s+/).filter(Boolean);
   const totalMs = Math.max(words.length * 420, 2000);
   const msPerWord = totalMs / words.length;
 
@@ -1059,6 +1067,19 @@ async function speakText(text) {
   } catch(e) { console.warn('TTS:', e); }
 }
 
+function cleanTextForSpeech(text) {
+  return text
+    .replace(/```[\s\S]*?```/g, ' code omitted ')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/!?\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/(^|\s)#{1,6}\s*/g, '$1')
+    .replace(/(^|\s)[*_]{1,3}(?=\S)/g, '$1')
+    .replace(/(?<=\S)[*_]{1,3}(?=\s|[.,!?;:]|$)/g, '')
+    .replace(/(^|\n)\s*[-*+]\s+/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 async function readApiResponse(response) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -1110,6 +1131,8 @@ async function endAndGetFeedback() {
     const data = await readApiResponse(response);
     renderFeedback(data.feedback || {});
     document.getElementById('feedbackPanel').classList.add('visible');
+    document.getElementById('viewFeedbackBtn').classList.add('visible');
+    document.querySelector('.end-btn').disabled = true;
   } catch (error) {
     setStatus('Feedback error: ' + error.message);
     document.getElementById('recordBtn').disabled = false;
@@ -1128,8 +1151,16 @@ function renderFeedback(feedback) {
 function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char])); }
 
 function closeFeedback() {
-  document.getElementById('feedbackPanel').classList.remove('visible');
+  hideFeedback();
   endInterview();
+}
+
+function hideFeedback() {
+  document.getElementById('feedbackPanel').classList.remove('visible');
+}
+
+function showFeedback() {
+  document.getElementById('feedbackPanel').classList.add('visible');
 }
 
 function endInterview() {
@@ -1140,6 +1171,8 @@ function endInterview() {
   document.getElementById('chatMessages').innerHTML = '';
   document.getElementById('codeArea').value = '';
   document.getElementById('navLive').classList.add('hidden');
+  document.getElementById('viewFeedbackBtn').classList.remove('visible');
+  document.querySelector('.end-btn').disabled = false;
   exchangeCount = 0; selectedMode = null; selectedCompany = null; isSpeaking = false;
   document.querySelectorAll('.mode-tile,.co-tile').forEach(t => t.classList.remove('selected'));
   document.getElementById('companySection').classList.remove('visible');
