@@ -20,7 +20,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
-RUN rm -rf public && cp -r client/dist public
+COPY --from=client-build /client/dist ./public
 
 EXPOSE 7860
 
