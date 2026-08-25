@@ -16,8 +16,12 @@ from src.rag import get_context
 from src.analytics import analyze_interview
 from src.interview_templates import build_interview_template, compact_messages, stage_for_exchange
 from src.storage import get_interview, get_user, init_db, list_interviews, save_interview, upsert_user
+from src.utils import mongo_connect
+
 
 load_dotenv()
+
+mongo_connect()
 
 app = FastAPI()
 

@@ -9,3 +9,4 @@ httpx
 numpy
 authlib
 itsdangerous
+pymongo[srv]
