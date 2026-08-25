@@ -5,11 +5,24 @@ import time
 
 from bson import ObjectId
 from pymongo import MongoClient
+from pymongo.errors import PyMongoError
 from pymongo.server_api import ServerApi
 
 MONGO_URI = os.environ.get("MONGO_URI", "")
 MONGO_DB_NAME = os.environ.get("MONGO_DB_NAME", "ai_interviewer")
-_client = MongoClient(MONGO_URI, server_api=ServerApi("1"), connect=False) if MONGO_URI else None
+MONGO_TIMEOUT_MS = int(os.environ.get("MONGO_TIMEOUT_MS", "5000"))
+_client = (
+    MongoClient(
+        MONGO_URI,
+        server_api=ServerApi("1"),
+        connect=False,
+        serverSelectionTimeoutMS=MONGO_TIMEOUT_MS,
+        connectTimeoutMS=MONGO_TIMEOUT_MS,
+        socketTimeoutMS=MONGO_TIMEOUT_MS,
+    )
+    if MONGO_URI
+    else None
+)
 _db = _client[MONGO_DB_NAME] if _client is not None else None
 _users = _db["users"] if _db is not None else None
 _interviews = _db["interviews"] if _db is not None else None
@@ -19,9 +32,14 @@ SESSION_CACHE_TTL = 30
 
 def init_db():
     if _db is None:
-        return
-    _users.create_index("auth_sub", unique=True)
-    _interviews.create_index([("user_id", 1), ("started_at", -1)])
+        return False
+    try:
+        _users.create_index("auth_sub", unique=True)
+        _interviews.create_index([("user_id", 1), ("started_at", -1)])
+        return True
+    except PyMongoError as exc:
+        print(f"MongoDB index initialization deferred: {type(exc).__name__}")
+        return False
 
 
 def _require_db():
@@ -37,8 +55,6 @@ def _public_user(user):
         "name": user.get("name", ""),
         "picture": user.get("picture", ""),
     }
-
-
 def upsert_user(auth_sub, email, name="", picture=""):
     _require_db()
     now = time.time()
@@ -132,6 +148,3 @@ def get_interview(user_id, interview_id):
         "transcript": interview.get("transcript", []),
         "feedback": interview.get("feedback"),
     }
-
-
-init_db()
