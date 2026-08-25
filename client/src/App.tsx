@@ -1,4 +1,4 @@
-import { Show, SignInButton, UserButton } from "@clerk/react";
+import { Show, SignInButton, UserButton, useAuth } from "@clerk/react";
 import { useEffect, useRef, useState } from "react";
 
 type Mode = "dsa" | "system_design" | "behavioral" | "company";
@@ -19,6 +19,28 @@ interface Feedback {
   pain_points?: { title?: string; detail?: string }[];
   areas_of_improvement?: { title?: string; action?: string }[];
   next_steps?: string[];
+}
+
+interface User {
+  id: string;
+  email: string;
+  name?: string;
+  picture?: string;
+}
+
+interface SavedSession {
+  id: string;
+  mode: Mode;
+  company?: string;
+  role: string;
+  started_at: number;
+  ended_at?: number;
+  has_feedback?: boolean;
+}
+
+interface SavedInterview extends SavedSession {
+  transcript: Message[];
+  feedback?: Feedback | null;
 }
 
 const modes: { id: Mode; icon: string; label: string; sub: string }[] = [
@@ -52,6 +74,7 @@ const stages: { id: Stage; label: string }[] = [
 ];
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const backendUrl = import.meta.env.VITE_BACKEND_URL || "";
 
 async function readApiResponse(response: Response) {
   const data = await response.json().catch(() => ({}));
@@ -77,13 +100,14 @@ function cleanTextForSpeech(text: string) {
 }
 
 export default function App() {
+  const { getToken } = useAuth();
   const [screen, setScreen] = useState<"setup" | "interview">("setup");
   const [selectedMode, setSelectedMode] = useState<Mode | null>(null);
   const [selectedCompany, setSelectedCompany] = useState<Company | null>(null);
   const [role, setRole] = useState("SDE");
   const [resume, setResume] = useState<File | null>(null);
   const [resumeStatus, setResumeStatus] = useState("");
-  const [sessions, setSessions] = useState<any[]>([]);
+  const [sessions, setSessions] = useState<SavedSession[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   // Holds the AI response while it is being displayed progressively.
@@ -101,7 +125,7 @@ export default function App() {
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [showFeedback, setShowFeedback] = useState(false);
   const [isSavedView, setIsSavedView] = useState(false);
-  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -109,8 +133,17 @@ export default function App() {
   const speechRef = useRef<SpeechSynthesisUtterance | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  async function apiFetch(path: string, init: RequestInit = {}) {
+    const token = await getToken();
+    const headers = new Headers(init.headers);
+    if (token) headers.set("Authorization", `Bearer ${token}`);
+    return fetch(`${backendUrl}${path}`, { ...init, headers });
+  }
+
   useEffect(() => {
     loadAuthState();
+    // Authentication functions are intentionally initialized once per mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -119,9 +152,9 @@ export default function App() {
 
   async function loadAuthState() {
     try {
-      const response = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/auth/me`);
+      const response = await apiFetch("/api/auth/me");
       const data = await response.json();
-      const user = data.user || null;
+      const user = (data.user as User | null) || null;
       setCurrentUser(user);
       if (user) loadSavedSessions();
     } catch (error) {
@@ -131,10 +164,10 @@ export default function App() {
 
   async function loadSavedSessions() {
     try {
-      const response = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/sessions`);
+      const response = await apiFetch("/api/sessions");
       if (!response.ok) return;
       const data = await response.json();
-      setSessions(data.sessions || []);
+      setSessions((data.sessions as SavedSession[]) || []);
     } catch {
       // Keep setup usable if session history is unavailable.
     }
@@ -190,7 +223,7 @@ export default function App() {
       form.append("role", role);
       if (resume) form.append("resume", resume, resume.name);
 
-      const res = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/start-interview`, {
+      const res = await apiFetch("/api/start-interview", {
         method: "POST",
         body: form,
       });
@@ -249,7 +282,7 @@ export default function App() {
 
   async function speakText(text: string) {
     try {
-      const res = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/synthesize`, {
+      const res = await apiFetch("/api/synthesize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text }),
@@ -351,7 +384,7 @@ export default function App() {
     fd.append("audio", blob, "rec.webm");
 
     try {
-      const tr = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/transcribe`, { method: "POST", body: fd });
+      const tr = await apiFetch("/api/transcribe", { method: "POST", body: fd });
       const td = await readApiResponse(tr);
 
       if (!td.text?.trim()) {
@@ -362,7 +395,7 @@ export default function App() {
       addUserMessage(td.text);
       setStatus("Interviewer is thinking...");
 
-      const rr = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/respond`, {
+      const rr = await apiFetch("/api/respond", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -405,7 +438,7 @@ export default function App() {
     setStatus("Sending code...");
 
     try {
-      const rr = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/respond`, {
+      const rr = await apiFetch("/api/respond", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ session_id: sessionId, message: msg, code: trimmed }),
@@ -425,17 +458,21 @@ export default function App() {
 
   async function viewSavedSession(interviewId: string) {
     try {
-      const response = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/sessions/${encodeURIComponent(interviewId)}`);
+      const response = await apiFetch(`/api/sessions/${encodeURIComponent(interviewId)}`);
       if (!response.ok) return;
 
-      const interview = await response.json();
+      const interview = (await response.json()) as SavedInterview;
       setSelectedMode(interview.mode);
-      setSelectedCompany(interview.company || null);
+      setSelectedCompany(
+        interview.company === "amazon" || interview.company === "microsoft"
+          ? interview.company
+          : null
+      );
       setRole(interview.role);
       setSessionId(interview.id);
       setExchangeCount(interview.transcript?.length || 0);
       setMessages(
-        (interview.transcript || []).map((message: any) => ({
+        (interview.transcript || []).map((message: Message) => ({
           role: message.role === "assistant" ? "assistant" : "user",
           content: message.content,
         }))
@@ -454,7 +491,7 @@ export default function App() {
     setStatus("Preparing your feedback...");
 
     try {
-      const response = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/end-interview`, {
+      const response = await apiFetch("/api/end-interview", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ session_id: sessionId }),
@@ -485,10 +522,6 @@ export default function App() {
       "# Write your solution here\n# Explain your approach verbally first,\n# then implement it here when asked.\n\ndef solution():\n  pass"
     );
     loadSavedSessions();
-  }
-
-  function updateStage(nextStage: Stage) {
-    setStage(nextStage);
   }
 
   const roleLabel = role.includes("—")

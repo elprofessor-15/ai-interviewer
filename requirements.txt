@@ -7,6 +7,5 @@ python-docx
 pypdf
 httpx
 numpy
-authlib
-itsdangerous
-pymongo[srv]
+pymongo
+PyJWT[crypto]

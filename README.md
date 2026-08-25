@@ -11,19 +11,19 @@ license: mit
 
 Live App Link: https://elprofessor15-ai-interviewer.hf.space/
 
-## Google sign-in and saved interviews
+## Clerk sign-in and saved interviews
 
-Google sign-in is optional. Without it, interviews continue to work anonymously. To enable saved per-user history in the Hugging Face Space, add these values under Space Settings -> Variables and secrets:
+Clerk sign-in is required by the React client. To enable verified user sessions and saved per-user history in the Hugging Face Space, add these values under Space Settings -> Variables and secrets:
 
-- `GOOGLE_CLIENT_ID`
-- `GOOGLE_CLIENT_SECRET`
-- `SESSION_SECRET` (a long random value)
-- `DATABASE_PATH=/data/ai_interviewer.db`
+- `CLERK_JWT_ISSUER` (the issuer URL from your Clerk instance)
+- `CLERK_JWKS_URL` (your Clerk instance JWKS URL, usually `<issuer>/.well-known/jwks.json`)
+- `MONGO_URI`
+- `MONGO_DB_NAME=ai_interviewer`
 
-In Google Cloud OAuth credentials, add this authorized redirect URI:
+The React build needs this client variable:
 
-`https://elprofessor15-ai-interviewer.hf.space/auth/callback`
+`VITE_CLERK_PUBLISHABLE_KEY`
 
-Enable persistent storage for the Space and mount it at `/data`; otherwise the SQLite database is local to the running container and can be lost when the Space restarts. Never commit OAuth secrets or API keys to this repository.
+Configure Google sign-in inside Clerk, not in this FastAPI server. Set `VITE_BACKEND_URL` only when the API is hosted on a different origin; leave it empty for the bundled same-origin Docker deployment. Never commit Clerk, MongoDB, or API secrets to this repository.
 
 Check out the configuration reference at https://huggingface.co/docs/hub/spaces-config-reference

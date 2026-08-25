@@ -1,11 +1,11 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware.sessions import SessionMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
-import os, secrets, tempfile, time
+from fastapi.responses import FileResponse, StreamingResponse
+import os, tempfile, time
 import httpx
-from authlib.integrations.starlette_client import OAuth, OAuthError
+import jwt
+from jwt import PyJWKClient
 from groq import Groq
 from dotenv import load_dotenv
 from collections import defaultdict
@@ -16,34 +16,9 @@ from src.rag import get_context
 from src.analytics import analyze_interview
 from src.interview_templates import build_interview_template, compact_messages, stage_for_exchange
 from src.storage import get_interview, get_user, init_db, list_interviews, save_interview, upsert_user
-from src.utils import mongo_connect
-
-
 load_dotenv()
 
-mongo_connect()
-
 app = FastAPI()
-
-SESSION_SECRET = os.environ.get("SESSION_SECRET", "")
-if not SESSION_SECRET:
-    SESSION_SECRET = secrets.token_urlsafe(32)
-COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "true" if os.environ.get("SPACE_ID") else "false").lower() == "true"
-app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET, https_only=COOKIE_SECURE, same_site="lax", max_age=60 * 60 * 24 * 14)
-
-oauth = OAuth()
-GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
-GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
-if GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET:
-    oauth.register(
-        name="google",
-        client_id=GOOGLE_CLIENT_ID,
-        client_secret=GOOGLE_CLIENT_SECRET,
-        server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
-        client_kwargs={"scope": "openid email profile"},
-    )
-
-init_db()
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-20b")
@@ -75,17 +50,38 @@ def check_rate_limit(ip: str):
 interview_sessions = {}
 MAX_RESUME_BYTES = 5 * 1024 * 1024
 MAX_RESUME_CHARS = 8000
+CLERK_JWT_ISSUER = os.environ.get("CLERK_JWT_ISSUER", "").rstrip("/")
+CLERK_JWKS_URL = os.environ.get("CLERK_JWKS_URL", "")
+clerk_jwks_client = PyJWKClient(CLERK_JWKS_URL) if CLERK_JWKS_URL else None
+
+init_db()
 
 
 def current_user(request: Request):
-    user_id = request.session.get("user_id")
-    return get_user(user_id) if user_id else None
+    if not clerk_jwks_client or not CLERK_JWT_ISSUER:
+        return None
+    authorization = request.headers.get("Authorization", "")
+    if not authorization.startswith("Bearer "):
+        return None
+    token = authorization[7:].strip()
+    try:
+        signing_key = clerk_jwks_client.get_signing_key_from_jwt(token)
+        claims = jwt.decode(token, signing_key.key, algorithms=["RS256"], issuer=CLERK_JWT_ISSUER, options={"verify_aud": False})
+        auth_sub = claims.get("sub")
+        email = claims.get("email") or claims.get("email_address") or auth_sub
+        if not auth_sub:
+            return None
+        name = claims.get("name") or " ".join(filter(None, [claims.get("first_name"), claims.get("last_name")]))
+        return upsert_user(auth_sub, email, name, claims.get("image_url", ""))
+    except Exception as exc:
+        print(f"Clerk authentication failed: {exc}")
+        return None
 
 
 def require_user(request: Request):
     user = current_user(request)
     if not user:
-        raise HTTPException(status_code=401, detail="Sign in with Google to access saved interviews")
+        raise HTTPException(status_code=401, detail="Sign in to access saved interviews")
     return user
 
 def extract_resume_text(filename: str, content: bytes) -> str:
@@ -113,40 +109,6 @@ def extract_resume_text(filename: str, content: bytes) -> str:
     if not cleaned:
         raise HTTPException(status_code=400, detail="Resume did not contain readable text")
     return cleaned[:MAX_RESUME_CHARS]
-
-
-@app.get("/auth/login")
-async def google_login(request: Request):
-    if not (GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET):
-        raise HTTPException(status_code=503, detail="Google sign-in is not configured")
-    redirect_uri = request.url_for("google_callback")
-    return await oauth.google.authorize_redirect(request, redirect_uri)
-
-
-@app.get("/auth/callback", name="google_callback")
-async def google_callback(request: Request):
-    if not (GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET):
-        raise HTTPException(status_code=503, detail="Google sign-in is not configured")
-    try:
-        token = await oauth.google.authorize_access_token(request)
-        userinfo = token.get("userinfo") or await oauth.google.userinfo(token=token)
-    except (OAuthError, KeyError, ValueError) as exc:
-        print(f"Google sign-in failed: {exc}")
-        raise HTTPException(status_code=401, detail="Google sign-in could not be completed")
-
-    google_sub = userinfo.get("sub")
-    email = userinfo.get("email")
-    if not google_sub or not email or userinfo.get("email_verified") is False:
-        raise HTTPException(status_code=401, detail="Google account email could not be verified")
-    user = upsert_user(google_sub, email, userinfo.get("name", ""), userinfo.get("picture", ""))
-    request.session["user_id"] = user["id"]
-    return RedirectResponse(url="/", status_code=303)
-
-
-@app.post("/auth/logout")
-async def google_logout(request: Request):
-    request.session.clear()
-    return {"ok": True}
 
 
 @app.get("/api/auth/me")
