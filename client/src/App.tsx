@@ -995,12 +995,31 @@ export default function App() {
         </div>
       </Show>
       <Show when="signed-out">
-        <div className="w-screen h-screen bg-black text-white flex items-center justify-center">
-          <SignInButton>
-            <button className="bg-blue-600 hover:bg-blue-700 text-white font-medium px-4 py-2 rounded-lg transition">
-              Sign In
-            </button>
-          </SignInButton>
+        <div className="relative flex min-h-screen w-screen items-center justify-center overflow-hidden bg-[#f4efe9] px-5 py-10 text-[#2c211e]">
+          <div className="pointer-events-none absolute inset-x-0 top-0 h-1 bg-[#bd3028]" />
+          <div className="pointer-events-none absolute -left-24 -top-24 h-72 w-72 rounded-full border-[36px] border-[rgba(189,48,40,.08)]" />
+          <div className="pointer-events-none absolute -bottom-32 -right-20 h-80 w-80 rounded-full border-[48px] border-[rgba(46,118,88,.08)]" />
+          <div className="relative w-full max-w-105 rounded-[24px] border border-[rgba(73,38,31,.14)] bg-[#fffaf5] p-8 shadow-[0_24px_70px_rgba(73,38,31,.12)] sm:p-10">
+            <div className="mb-10 flex items-center gap-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#bd3028] text-lg font-bold text-[#fffaf5] shadow-[0_8px_20px_rgba(189,48,40,.22)]">NF</div>
+              <div>
+                <div className="text-base font-semibold tracking-tight">NoFoxAI</div>
+                <div className="text-xs text-[#977c73]">No fox given. Just practice.</div>
+              </div>
+            </div>
+            <div className="mb-8">
+              <div className="mb-3 text-[.7rem] font-semibold uppercase tracking-[.14em] text-[#bd3028]">Your interview room</div>
+              <h1 className="text-[2.35rem] font-light leading-[1.08] tracking-[-.04em]">Practice with<br /><strong className="font-semibold">real confidence.</strong></h1>
+              <p className="mt-4 max-w-85 text-sm leading-6 text-[#67534d]">Sign in to run voice interviews, save your conversations, and return to feedback whenever you need it.</p>
+            </div>
+            <SignInButton mode="modal">
+              <button className="flex w-full items-center justify-center gap-3 rounded-xl bg-[#bd3028] px-4 py-3.5 text-sm font-semibold text-white shadow-[0_10px_24px_rgba(141,32,29,.18)] transition hover:-translate-y-px hover:bg-[#a92822] hover:shadow-[0_14px_30px_rgba(141,32,29,.24)]">
+                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-white text-xs font-bold text-[#bd3028]">G</span>
+                Continue with Google
+              </button>
+            </SignInButton>
+            <p className="mt-5 text-center text-xs leading-5 text-[#977c73]">Your saved interviews are private to your account.</p>
+          </div>
         </div>
       </Show>
     </>
