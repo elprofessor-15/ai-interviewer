@@ -490,7 +490,7 @@ async def get_response(request: Request):
                 "content": f"Relevant context from real interview experiences:\n{context}"
             })
 
-    stage = stage_for_exchange(count)
+    stage = stage_for_exchange(count, session["mode"])
     session["messages"][0]["content"] = build_interview_template(
         mode=session["mode"],
         role=session["role"],

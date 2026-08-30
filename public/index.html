@@ -794,7 +794,10 @@ def solution():
     <div class="feedback-section"><h3>What worked</h3><div class="feedback-list" id="feedbackStrengths"></div></div>
     <div class="feedback-section"><h3>Where to improve</h3><div class="feedback-list" id="feedbackGaps"></div></div>
     <div class="feedback-section"><h3>Next practice steps</h3><div class="feedback-list" id="feedbackSteps"></div></div>
-    <div class="feedback-actions"><button class="feedback-close" onclick="closeFeedback()">Start another interview</button></div>
+    <div class="feedback-actions">
+      <button class="feedback-close" onclick="closeFeedback()">Close</button>
+      <button class="feedback-close alt" onclick="startAnotherInterview()">Start another interview</button>
+    </div>
   </div>
 </div>
 
@@ -1155,14 +1158,14 @@ async function speakText(text) {
 }
 
 function cleanTextForSpeech(text) {
-  return text
+  return String(text || '')
     .replace(/```[\s\S]*?```/g, ' code omitted ')
     .replace(/`([^`]+)`/g, '$1')
-    .replace(/!?\[([^\]]+)\]\([^)]*\)/g, '$1')
-    .replace(/(^|\s)#{1,6}\s*/g, '$1')
-    .replace(/(^|\s)[*_]{1,3}(?=\S)/g, '$1')
-    .replace(/(?<=\S)[*_]{1,3}(?=\s|[.,!?;:]|$)/g, '')
-    .replace(/(^|\n)\s*[-*+]\s+/g, '$1')
+    .replace(/!\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/#{1,6}\s*/g, '')
+    .replace(/^(?:[-*+]\s+)/gm, '')
+    .replace(/[*_~]+/g, '')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -1238,6 +1241,10 @@ function renderFeedback(feedback) {
 function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char])); }
 
 function closeFeedback() {
+  hideFeedback();
+}
+
+function startAnotherInterview() {
   hideFeedback();
   endInterview();
 }

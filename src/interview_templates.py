@@ -50,7 +50,13 @@ def build_interview_template(mode, role, company="", resume_context="", stage="i
     )
 
 
-def stage_for_exchange(exchange_count):
+def stage_for_exchange(exchange_count, mode="behavioral"):
+    if mode == "dsa":
+        if exchange_count <= 1:
+            return "introduction"
+        if exchange_count <= 6:
+            return "technical"
+        return "closing"
     if exchange_count <= 1:
         return "introduction"
     if exchange_count <= 9:
